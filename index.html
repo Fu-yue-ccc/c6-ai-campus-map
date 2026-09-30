@@ -1,0 +1,459 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI 校园地图生成器 | Campus Map Generator</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif; }
+  #map { height: 500px; border-radius: 12px; z-index: 1; }
+  .gradient-bg { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); }
+  .card-hover { transition: all 0.3s ease; }
+  .card-hover:hover { transform: translateY(-2px); box-shadow: 0 10px 40px rgba(0,0,0,0.1); }
+  .spinner { border: 3px solid #f3f3f3; border-top: 3px solid #667eea; border-radius: 50%; width: 24px; height: 24px; animation: spin 1s linear infinite; }
+  @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+  .fade-in { animation: fadeIn 0.5s ease-in; }
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+  .custom-marker { background: none; border: none; }
+  .marker-pin { width: 30px; height: 30px; border-radius: 50% 50% 50% 0; background: #667eea; position: absolute; transform: rotate(-45deg); left: 50%; top: 50%; margin: -15px 0 0 -15px; box-shadow: 0 2px 8px rgba(0,0,0,0.3); }
+  .marker-pin::after { content: ''; width: 14px; height: 14px; margin: 8px 0 0 8px; background: white; border-radius: 50%; position: absolute; }
+</style>
+</head>
+<body class="bg-gray-50 min-h-screen">
+
+<!-- Header -->
+<header class="gradient-bg text-white py-8 px-4">
+  <div class="max-w-6xl mx-auto">
+    <div class="flex items-center gap-3 mb-2">
+      <span class="text-4xl">🗺️</span>
+      <h1 class="text-3xl md:text-4xl font-bold">AI 校园地图生成器</h1>
+    </div>
+    <p class="text-white/80 text-lg">输入地点名称，AI 自动生成带分类标记的交互式地图 — 零代码，秒级出图</p>
+  </div>
+</header>
+
+<main class="max-w-6xl mx-auto px-4 py-8">
+
+  <!-- Input Panel -->
+  <div class="bg-white rounded-2xl shadow-lg p-6 mb-8 card-hover">
+    <h2 class="text-xl font-bold text-gray-800 mb-4 flex items-center gap-2">
+      <span>⚙️</span> 生成设置
+    </h2>
+
+    <div class="grid md:grid-cols-2 gap-6">
+      <!-- Left: Basic Settings -->
+      <div class="space-y-4">
+        <div>
+          <label class="block text-sm font-medium text-gray-700 mb-1">地点名称 <span class="text-red-500">*</span></label>
+          <input type="text" id="locationName" value="郑州西亚斯学院" 
+            class="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent transition"
+            placeholder="例如：郑州西亚斯学院、北京大学、你的公司园区">
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-gray-700 mb-1">生成地点数量</label>
+          <input type="number" id="locationCount" value="10" min="3" max="30"
+            class="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent transition">
+          <p class="text-xs text-gray-500 mt-1">建议 5-20 个，过多可能影响生成质量</p>
+        </div>
+      </div>
+
+      <!-- Right: AI Settings -->
+      <div class="space-y-4">
+        <div>
+          <label class="block text-sm font-medium text-gray-700 mb-1">AI 模式</label>
+          <div class="flex gap-2">
+            <button id="demoModeBtn" onclick="setMode('demo')" 
+              class="flex-1 py-2.5 px-4 rounded-lg font-medium transition bg-purple-600 text-white">
+              🎯 Demo 模式
+            </button>
+            <button id="aiModeBtn" onclick="setMode('ai')" 
+              class="flex-1 py-2.5 px-4 rounded-lg font-medium transition bg-gray-100 text-gray-600 hover:bg-gray-200">
+              🤖 AI 模式
+            </button>
+          </div>
+        </div>
+        <div id="aiSettings" class="hidden space-y-3">
+          <div>
+            <label class="block text-sm font-medium text-gray-700 mb-1">API 地址（OpenAI 兼容）</label>
+            <input type="text" id="apiBase" value="https://api.openai.com/v1"
+              class="w-full px-4 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-purple-500 focus:border-transparent">
+          </div>
+          <div>
+            <label class="block text-sm font-medium text-gray-700 mb-1">API Key</label>
+            <input type="password" id="apiKey" placeholder="sk-..." 
+              class="w-full px-4 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-purple-500 focus:border-transparent">
+            <p class="text-xs text-gray-500 mt-1">🔒 Key 仅在浏览器本地使用，不会上传到任何服务器</p>
+          </div>
+          <div>
+            <label class="block text-sm font-medium text-gray-700 mb-1">模型名称</label>
+            <input type="text" id="modelName" value="gpt-4o-mini"
+              class="w-full px-4 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-purple-500 focus:border-transparent">
+          </div>
+        </div>
+        <div id="demoHint" class="bg-purple-50 border border-purple-200 rounded-lg p-3 text-sm text-purple-700">
+          💡 Demo 模式使用内置的 SIAS 大学真实数据，无需 API Key，点击即可体验完整功能。
+        </div>
+      </div>
+    </div>
+
+    <div class="mt-6 flex gap-3">
+      <button onclick="generateMap()" id="generateBtn"
+        class="flex-1 gradient-bg text-white py-3 px-6 rounded-lg font-bold text-lg hover:opacity-90 transition flex items-center justify-center gap-2">
+        <span id="btnText">🚀 生成地图</span>
+        <span id="btnSpinner" class="spinner hidden"></span>
+      </button>
+      <button onclick="exportData()" id="exportBtn" disabled
+        class="px-6 py-3 bg-gray-100 text-gray-600 rounded-lg font-medium hover:bg-gray-200 transition disabled:opacity-50 disabled:cursor-not-allowed">
+        📥 导出 JSON
+      </button>
+    </div>
+  </div>
+
+  <!-- Status Message -->
+  <div id="statusMsg" class="hidden mb-6"></div>
+
+  <!-- Map Section -->
+  <div id="mapSection" class="hidden fade-in">
+    <div class="bg-white rounded-2xl shadow-lg p-6 mb-8">
+      <div class="flex items-center justify-between mb-4">
+        <h2 class="text-xl font-bold text-gray-800 flex items-center gap-2">
+          <span>🗺️</span> <span id="mapTitle">交互式地图</span>
+        </h2>
+        <span id="locationCount" class="bg-purple-100 text-purple-700 px-3 py-1 rounded-full text-sm font-medium"></span>
+      </div>
+      <div id="map"></div>
+      <!-- Legend -->
+      <div id="legend" class="mt-4 flex flex-wrap gap-2"></div>
+    </div>
+
+    <!-- Location List -->
+    <div class="bg-white rounded-2xl shadow-lg p-6">
+      <h2 class="text-xl font-bold text-gray-800 mb-4 flex items-center gap-2">
+        <span>📋</span> 地点清单
+      </h2>
+      <div id="locationList" class="grid md:grid-cols-2 gap-3"></div>
+    </div>
+  </div>
+
+  <!-- How it works -->
+  <div class="mt-12 bg-white rounded-2xl shadow-lg p-6">
+    <h2 class="text-xl font-bold text-gray-800 mb-4 flex items-center gap-2">
+      <span>💡</span> 工作原理
+    </h2>
+    <div class="grid md:grid-cols-4 gap-4">
+      <div class="text-center p-4">
+        <div class="text-3xl mb-2">📝</div>
+        <h3 class="font-bold text-gray-800 mb-1">1. 输入</h3>
+        <p class="text-sm text-gray-600">输入地点名称和数量</p>
+      </div>
+      <div class="text-center p-4">
+        <div class="text-3xl mb-2">🤖</div>
+        <h3 class="font-bold text-gray-800 mb-1">2. AI 生成</h3>
+        <p class="text-sm text-gray-600">AI 输出结构化地点 JSON</p>
+      </div>
+      <div class="text-center p-4">
+        <div class="text-3xl mb-2">✅</div>
+        <h3 class="font-bold text-gray-800 mb-1">3. 验证</h3>
+        <p class="text-sm text-gray-600">自动校验坐标和字段完整性</p>
+      </div>
+      <div class="text-center p-4">
+        <div class="text-3xl mb-2">🗺️</div>
+        <h3 class="font-bold text-gray-800 mb-1">4. 渲染</h3>
+        <p class="text-sm text-gray-600">Leaflet.js 渲染交互式地图</p>
+      </div>
+    </div>
+  </div>
+
+</main>
+
+<footer class="bg-gray-800 text-white py-6 px-4 mt-12">
+  <div class="max-w-6xl mx-auto text-center text-sm text-gray-400">
+    <p>AI Campus Map Generator | 基于 C4D 本地大模型地图 Agent 项目 | 地图数据 © OpenStreetMap contributors</p>
+    <p class="mt-1">本项目仅用于学习和演示，AI 生成的坐标可能存在偏差，请以实际地图为准</p>
+  </div>
+</footer>
+
+<script>
+// ==================== State ====================
+let currentMode = 'demo';
+let currentLocations = [];
+let map = null;
+let markers = [];
+
+// ==================== Demo Data (SIAS University) ====================
+const DEMO_DATA = [
+  { name: "郑州西亚斯学院正门", name_zh: "正门", latitude: 34.401422, longitude: 113.765004, description: "西亚斯学院主入口，位于新郑市人民路东段168号", category: "校门" },
+  { name: "莫斯科红场", name_zh: "莫斯科红场", latitude: 34.400800, longitude: 113.766200, description: "校园标志性欧式建筑群，仿照莫斯科红场风格", category: "地标建筑" },
+  { name: "西亚斯图书馆", name_zh: "图书馆", latitude: 34.399500, longitude: 113.767000, description: "学校图书馆，内设咖啡厅，学生学习休闲的重要场所", category: "教学设施" },
+  { name: "综合体育馆", name_zh: "综合体育馆", latitude: 34.399654, longitude: 113.766787, description: "承办各类体育赛事和校园活动", category: "体育设施" },
+  { name: "欧洲街", name_zh: "欧洲街", latitude: 34.400200, longitude: 113.767500, description: "校园商业步行街，汇聚必胜客、星巴克、泡泡玛特等品牌", category: "商业街" },
+  { name: "伦敦街", name_zh: "伦敦街", latitude: 34.398800, longitude: 113.768000, description: "欧式建筑风格街道，拥有罗马柱等欧式元素", category: "地标建筑" },
+  { name: "法国园", name_zh: "法国园", latitude: 34.398200, longitude: 113.766500, description: "法式风格园林，内设咖啡厅，环境优雅", category: "园林景观" },
+  { name: "西班牙广场", name_zh: "西班牙广场", latitude: 34.399000, longitude: 113.765500, description: "西班牙风格广场，旁设西班牙餐厅", category: "广场" },
+  { name: "渔夫子亭", name_zh: "渔夫子亭", latitude: 34.402500, longitude: 113.768500, description: "纪念春秋时期救助伍子胥的渔夫父子而建", category: "文化地标" },
+  { name: "堪萨斯国际学院", name_zh: "堪萨斯国际学院", latitude: 34.395225, longitude: 113.769275, description: "与美国富特海斯州立大学合作办学机构", category: "教学设施" },
+  { name: "郑风苑景区", name_zh: "郑风苑景区", latitude: 34.403000, longitude: 113.762000, description: "校园南门附近开放式景区，含游乐设施", category: "周边景点" },
+  { name: "轩辕湖公园", name_zh: "轩辕湖公园", latitude: 34.395000, longitude: 113.775000, description: "新郑市著名湿地公园，环境优美", category: "周边景点" }
+];
+
+// Category colors
+const CATEGORY_COLORS = {
+  "校门": "#ef4444", "地标建筑": "#3b82f6", "教学设施": "#10b981", "体育设施": "#f59e0b",
+  "商业街": "#8b5cf6", "园林景观": "#06b6d4", "广场": "#ec4899", "文化地标": "#6366f1",
+  "周边景点": "#84cc16", "餐饮": "#f97316", "住宿": "#14b8a6", "其他": "#6b7280"
+};
+
+// ==================== Mode Switching ====================
+function setMode(mode) {
+  currentMode = mode;
+  const demoBtn = document.getElementById('demoModeBtn');
+  const aiBtn = document.getElementById('aiModeBtn');
+  const aiSettings = document.getElementById('aiSettings');
+  const demoHint = document.getElementById('demoHint');
+
+  if (mode === 'demo') {
+    demoBtn.className = 'flex-1 py-2.5 px-4 rounded-lg font-medium transition bg-purple-600 text-white';
+    aiBtn.className = 'flex-1 py-2.5 px-4 rounded-lg font-medium transition bg-gray-100 text-gray-600 hover:bg-gray-200';
+    aiSettings.classList.add('hidden');
+    demoHint.classList.remove('hidden');
+  } else {
+    aiBtn.className = 'flex-1 py-2.5 px-4 rounded-lg font-medium transition bg-purple-600 text-white';
+    demoBtn.className = 'flex-1 py-2.5 px-4 rounded-lg font-medium transition bg-gray-100 text-gray-600 hover:bg-gray-200';
+    aiSettings.classList.remove('hidden');
+    demoHint.classList.add('hidden');
+  }
+}
+
+// ==================== Generate Map ====================
+async function generateMap() {
+  const btn = document.getElementById('generateBtn');
+  const btnText = document.getElementById('btnText');
+  const btnSpinner = document.getElementById('btnSpinner');
+  const statusMsg = document.getElementById('statusMsg');
+
+  const locationName = document.getElementById('locationName').value.trim();
+  const count = parseInt(document.getElementById('locationCount').value);
+
+  if (!locationName) {
+    showStatus('error', '⚠️ 请输入地点名称');
+    return;
+  }
+
+  btn.disabled = true;
+  btnText.textContent = '生成中...';
+  btnSpinner.classList.remove('hidden');
+  statusMsg.classList.add('hidden');
+
+  try {
+    if (currentMode === 'demo') {
+      await new Promise(r => setTimeout(r, 800)); // Simulate processing
+      currentLocations = DEMO_DATA.slice(0, Math.min(count, DEMO_DATA.length));
+      showStatus('success', `✅ Demo 模式：已加载 ${currentLocations.length} 个 SIAS 大学真实地点数据`);
+    } else {
+      const apiKey = document.getElementById('apiKey').value.trim();
+      const apiBase = document.getElementById('apiBase').value.trim();
+      const modelName = document.getElementById('modelName').value.trim();
+
+      if (!apiKey) {
+        showStatus('error', '⚠️ AI 模式需要输入 API Key，或切换到 Demo 模式');
+        btn.disabled = false;
+        btnText.textContent = '🚀 生成地图';
+        btnSpinner.classList.add('hidden');
+        return;
+      }
+
+      currentLocations = await callAI(apiBase, apiKey, modelName, locationName, count);
+      showStatus('success', `✅ AI 已生成 ${currentLocations.length} 个地点`);
+    }
+
+    renderMap(locationName);
+    renderLocationList();
+    document.getElementById('mapSection').classList.remove('hidden');
+    document.getElementById('exportBtn').disabled = false;
+
+    // Scroll to map
+    document.getElementById('mapSection').scrollIntoView({ behavior: 'smooth' });
+
+  } catch (err) {
+    console.error(err);
+    showStatus('error', `❌ 生成失败：${err.message}。请检查 API Key 和网络连接，或切换到 Demo 模式。`);
+  } finally {
+    btn.disabled = false;
+    btnText.textContent = '🚀 生成地图';
+    btnSpinner.classList.add('hidden');
+  }
+}
+
+// ==================== AI API Call ====================
+async function callAI(apiBase, apiKey, model, locationName, count) {
+  const systemPrompt = `You are a geography assistant. You ALWAYS respond with valid JSON only — no markdown, no explanations, no code blocks.
+Return a JSON array of exactly ${count} locations around "${locationName}".
+Each location must have: name (English), name_zh (Chinese), latitude (number), longitude (number), description (Chinese, 1-2 sentences), category (one of: 校门,地标建筑,教学设施,体育设施,商业街,园林景观,广场,文化地标,周边景点,餐饮,住宿,其他).
+Ensure coordinates are real and accurate.`;
+
+  const response = await fetch(`${apiBase}/chat/completions`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+    body: JSON.stringify({
+      model: model,
+      messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: `Generate ${count} interesting locations around ${locationName}.` }],
+      temperature: 0.7,
+      response_format: { type: 'json_object' }
+    })
+  });
+
+  if (!response.ok) {
+    const err = await response.text();
+    throw new Error(`API 返回 ${response.status}: ${err.substring(0, 200)}`);
+  }
+
+  const data = await response.json();
+  let content = data.choices[0].message.content;
+  
+  // Clean up markdown code blocks if present
+  content = content.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim();
+  
+  let parsed = JSON.parse(content);
+  // Handle wrapper object
+  if (parsed.locations) parsed = parsed.locations;
+  if (parsed.data) parsed = parsed.data;
+  if (!Array.isArray(parsed)) parsed = Object.values(parsed)[0];
+
+  // Validate
+  return parsed.filter(loc => 
+    loc.latitude && loc.longitude && 
+    typeof loc.latitude === 'number' && typeof loc.longitude === 'number' &&
+    loc.latitude >= -90 && loc.latitude <= 90 &&
+    loc.longitude >= -180 && loc.longitude <= 180
+  );
+}
+
+// ==================== Render Map ====================
+function renderMap(title) {
+  document.getElementById('mapTitle').textContent = `${title} — 交互式地图`;
+  document.getElementById('locationCount').textContent = `${currentLocations.length} 个地点`;
+
+  // Calculate center
+  const avgLat = currentLocations.reduce((s, l) => s + l.latitude, 0) / currentLocations.length;
+  const avgLng = currentLocations.reduce((s, l) => s + l.longitude, 0) / currentLocations.length;
+
+  // Initialize or update map
+  if (map) { map.remove(); }
+  map = L.map('map').setView([avgLat, avgLng], 15);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution: '© OpenStreetMap contributors',
+    maxZoom: 19
+  }).addTo(map);
+
+  // Clear old markers
+  markers = [];
+
+  // Add markers
+  currentLocations.forEach((loc, idx) => {
+    const color = CATEGORY_COLORS[loc.category] || '#6b7280';
+    const icon = L.divIcon({
+      className: 'custom-marker',
+      html: `<div style="background:${color};width:28px;height:28px;border-radius:50% 50% 50% 0;transform:rotate(-45deg);border:2px solid white;box-shadow:0 2px 8px rgba(0,0,0,0.3);display:flex;align-items:center;justify-content:center;"><span style="transform:rotate(45deg);color:white;font-size:12px;font-weight:bold;">${idx + 1}</span></div>`,
+      iconSize: [28, 28],
+      iconAnchor: [14, 28]
+    });
+
+    const marker = L.marker([loc.latitude, loc.longitude], { icon }).addTo(map);
+    const popupContent = `
+      <div style="min-width:200px;">
+        <div style="font-weight:bold;font-size:14px;margin-bottom:4px;">${idx + 1}. ${loc.name_zh || loc.name}</div>
+        <div style="font-size:12px;color:#666;margin-bottom:4px;">${loc.name}</div>
+        <div style="font-size:12px;color:#444;margin-bottom:4px;">${loc.description || ''}</div>
+        <div style="font-size:11px;color:#888;">📍 ${loc.latitude.toFixed(4)}, ${loc.longitude.toFixed(4)}</div>
+        <span style="display:inline-block;margin-top:4px;padding:2px 8px;background:${color};color:white;border-radius:10px;font-size:11px;">${loc.category}</span>
+      </div>`;
+    marker.bindPopup(popupContent);
+    markers.push(marker);
+  });
+
+  // Fit bounds
+  if (currentLocations.length > 1) {
+    const bounds = L.latLngBounds(currentLocations.map(l => [l.latitude, l.longitude]));
+    map.fitBounds(bounds, { padding: [50, 50] });
+  }
+
+  // Render legend
+  renderLegend();
+}
+
+// ==================== Render Legend ====================
+function renderLegend() {
+  const legend = document.getElementById('legend');
+  const categories = [...new Set(currentLocations.map(l => l.category))];
+  legend.innerHTML = categories.map(cat => {
+    const color = CATEGORY_COLORS[cat] || '#6b7280';
+    const count = currentLocations.filter(l => l.category === cat).length;
+    return `<span class="inline-flex items-center gap-1.5 px-3 py-1 bg-gray-50 rounded-full text-sm">
+      <span style="width:12px;height:12px;background:${color};border-radius:50%;"></span>
+      ${cat} (${count})
+    </span>`;
+  }).join('');
+}
+
+// ==================== Render Location List ====================
+function renderLocationList() {
+  const list = document.getElementById('locationList');
+  list.innerHTML = currentLocations.map((loc, idx) => {
+    const color = CATEGORY_COLORS[loc.category] || '#6b7280';
+    return `<div class="border border-gray-200 rounded-lg p-4 hover:border-purple-300 hover:shadow-md transition cursor-pointer" onclick="focusMarker(${idx})">
+      <div class="flex items-start justify-between">
+        <div class="flex items-center gap-2">
+          <span style="background:${color};color:white;width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:bold;">${idx + 1}</span>
+          <span class="font-bold text-gray-800">${loc.name_zh || loc.name}</span>
+        </div>
+        <span class="text-xs px-2 py-0.5 rounded-full" style="background:${color}20;color:${color};">${loc.category}</span>
+      </div>
+      <p class="text-sm text-gray-600 mt-2">${loc.description || ''}</p>
+      <p class="text-xs text-gray-400 mt-1">📍 ${loc.latitude.toFixed(4)}, ${loc.longitude.toFixed(4)}</p>
+    </div>`;
+  }).join('');
+}
+
+function focusMarker(idx) {
+  if (markers[idx]) {
+    map.setView(markers[idx].getLatLng(), 17);
+    markers[idx].openPopup();
+  }
+}
+
+// ==================== Export ====================
+function exportData() {
+  const data = JSON.stringify(currentLocations, null, 2);
+  const blob = new Blob([data], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'campus_locations.json';
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+// ==================== Status ====================
+function showStatus(type, msg) {
+  const el = document.getElementById('statusMsg');
+  const colors = {
+    success: 'bg-green-50 border-green-200 text-green-700',
+    error: 'bg-red-50 border-red-200 text-red-700',
+    info: 'bg-blue-50 border-blue-200 text-blue-700'
+  };
+  el.className = `mb-6 p-4 rounded-lg border ${colors[type] || colors.info}`;
+  el.textContent = msg;
+  el.classList.remove('hidden');
+}
+
+// ==================== Init ====================
+window.addEventListener('load', () => {
+  // Auto-generate demo map on load for instant gratification
+  setTimeout(() => generateMap(), 500);
+});
+</script>
+</body>
+</html>
